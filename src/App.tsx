@@ -44,6 +44,8 @@ interface Ball {
   released: boolean;
   binIndex: number | null;
   stuckTimer: number;
+  settleTimer: number;
+  inBinTimer: number;
   color: string;
 }
 
@@ -62,11 +64,11 @@ interface Bin {
 
 // --- Constants ---
 
-const GRAVITY = 0.1; // Slightly faster to reduce slow-mo feel
+const GRAVITY = 0.1; // Standard gravity
 const BOUNCE = 0.85;  
 const WALL_BOUNCE = 0.85; 
 const FRICTION = 0.992; 
-const BIN_FRICTION = 0.4; // More friction to stop balls faster in bins
+const BIN_FRICTION = 0.8; // Normal friction to allow movement in bins
 const PEG_RADIUS = 4;
 const BALL_RADIUS = 16; 
 const SNAP_THRESHOLD = 0.3; 
@@ -142,7 +144,10 @@ export default function App() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [copied, setCopied] = useState(false);
   const [showSettings, setShowSettings] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  const prevCanvasSizeRef = useRef({ width: 0, height: 0 });
   const [isManualZoom, setIsManualZoom] = useState(false);
   const isSimulatingRef = useRef(false);
   const simulationStartTimeRef = useRef(0);
@@ -163,6 +168,13 @@ export default function App() {
   useEffect(() => {
     if (!containerRef.current || !canvasRef.current) return;
     
+    const checkMobile = () => {
+      const mobile = window.innerWidth < 1024;
+      setIsMobile(mobile);
+      if (!mobile) setIsSidebarOpen(true);
+    };
+    checkMobile();
+
     const observer = new ResizeObserver((entries) => {
       const { width, height } = entries[0].contentRect;
       if (canvasRef.current) {
@@ -173,7 +185,12 @@ export default function App() {
     });
     
     observer.observe(containerRef.current);
-    return () => observer.disconnect();
+    window.addEventListener('resize', checkMobile);
+    
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', checkMobile);
+    };
   }, []);
 
   // --- Persistence ---
@@ -212,7 +229,7 @@ export default function App() {
   // Setup board structure whenever configuration changes
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || canvasSize.width === 0) return;
 
     const width = canvas.width;
     const height = canvas.height;
@@ -269,33 +286,66 @@ export default function App() {
     }
     pegsRef.current = newPegs;
 
-    // Initial Ball Placement (Max 2 rows)
-    const ballsPerRow = Math.max(1, Math.ceil(students.length / 2));
-    const spacing = BALL_RADIUS * 2.4;
+    // ONLY setup/reset balls if we haven't started yet or if names/settings changed
+    // This prevents disappearing balls on resize during/after simulation
+    const hasActiveBalls = ballsRef.current.some(b => b.released || b.settled);
     
-    ballsRef.current = students.map((s, i) => {
-      const row = Math.floor(i / ballsPerRow);
-      const col = i % ballsPerRow;
-      const rowCount = Math.min(ballsPerRow, students.length - row * ballsPerRow);
-      const rowWidth = (rowCount - 1) * spacing;
-      const rowStartX = (width - rowWidth) / 2;
+    if (hasActiveBalls && prevCanvasSizeRef.current.width > 0) {
+      // Shift balls to maintain relative position to the center
+      const dx = (width - prevCanvasSizeRef.current.width) / 2;
+      const dy = (height - prevCanvasSizeRef.current.height); // Shift from bottom
+      
+      ballsRef.current.forEach(b => {
+        if (b.settled) {
+          // Recalculate settled position based on new bin positions
+          if (b.binIndex !== null) {
+            const bIdx = b.binIndex;
+            const binCenterX = binStartX + bIdx * binWidth + binWidth / 2;
+            const bin = binsRef.current[bIdx];
+            // We need to know which position in the stack this ball was.
+            // This is tricky. Let's just shift them by dx and dy for now.
+            b.x += dx;
+            b.y += dy;
+          }
+        } else {
+          b.x += dx;
+          b.y += dy;
+        }
+      });
+    }
 
-      return {
-        x: rowStartX + col * spacing,
-        y: 20 + row * spacing,
-        vx: 0,
-        vy: 0,
-        radius: BALL_RADIUS,
-        student: s,
-        settled: false,
-        released: false,
-        binIndex: null,
-        stuckTimer: 0,
-        color: s.color
-      };
-    });
+    if (!isSimulatingRef.current && !hasActiveBalls) {
+      const ballsPerRow = Math.max(1, Math.ceil(students.length / 2));
+      const spacing = BALL_RADIUS * 2.4;
+      
+      ballsRef.current = students.map((s, i) => {
+        const row = Math.floor(i / ballsPerRow);
+        const col = i % ballsPerRow;
+        const rowCount = Math.min(ballsPerRow, students.length - row * ballsPerRow);
+        const rowWidth = (rowCount - 1) * spacing;
+        const rowStartX = (width - rowWidth) / 2;
 
-    setGroups(Array.from({ length: groupCount }, (_, i) => ({ id: i + 1, students: [] })));
+        return {
+          x: rowStartX + col * spacing,
+          y: 20 + row * spacing,
+          vx: 0,
+          vy: 0,
+          radius: BALL_RADIUS,
+          student: s,
+          settled: false,
+          released: false,
+          binIndex: null,
+          stuckTimer: 0,
+          settleTimer: 0,
+          inBinTimer: 0,
+          color: s.color
+        };
+      });
+
+      setGroups(Array.from({ length: groupCount }, (_, i) => ({ id: i + 1, students: [] })));
+    }
+    
+    prevCanvasSizeRef.current = { width, height };
   }, [calculatedGroupCount, students, maxStudentsPerGroup, canvasSize]);
 
   const initSimulation = () => {
@@ -316,6 +366,7 @@ export default function App() {
     });
 
     setShowSettings(false);
+    if (isMobile) setIsSidebarOpen(false);
     isSimulatingRef.current = true;
     setIsSimulating(true);
     simulationStartTimeRef.current = Date.now();
@@ -520,10 +571,15 @@ export default function App() {
 
           // Only collide if they are moving towards each other
           if (velAlongNormal < 0) {
-            const impulse = -(1 + BOUNCE) * velAlongNormal;
+            // Use lower bounce factor inside bins to settle faster
+            const currentBounce = (ball.y > binTopY || other.y > binTopY) ? 0.05 : BOUNCE;
+            const impulse = -(1 + currentBounce) * velAlongNormal;
             if (other.settled) {
               ball.vx -= impulse * nx;
               ball.vy -= impulse * ny;
+              // Apply friction when hitting a settled ball
+              ball.vx *= BIN_FRICTION;
+              ball.vy *= BIN_FRICTION;
             } else {
               const impulseX = impulse * nx * 0.5;
               const impulseY = impulse * ny * 0.5;
@@ -547,74 +603,49 @@ export default function App() {
         
         // Capacity logic: If bin is full, bounce off the "lid"
         const assignedCount = binCounts[bIdx];
-        if (assignedCount >= bin.maxCapacity && ball.y < binTopY + 10) {
+        if (assignedCount >= bin.maxCapacity && ball.y < binTopY + ball.radius) {
           ball.y = binTopY - ball.radius - 2;
-          ball.vy = -Math.abs(ball.vy) * 0.4 - 0.5; 
+          ball.vy = -Math.abs(ball.vy) * 0.5 - 0.5; 
           // Push towards the nearest non-full bin
           let pushDir = (ball.x < binCenterX ? -1 : 1);
           if (bIdx === 0) pushDir = 1;
           if (bIdx === bins.length - 1) pushDir = -1;
           
-          ball.vx = pushDir * 5 + (Math.random() - 0.5) * 3; 
+          ball.vx = pushDir * 6 + (Math.random() - 0.5) * 4; 
           ball.binIndex = null;
           ball.stuckTimer = 0;
+          ball.settleTimer = 0;
           return;
         }
 
-        // Help ball enter bin center - soft force
-        ball.vx += (binCenterX - ball.x) * 0.05;
+        // Calculate target position in the stack
+        const targetY = floorY - ball.radius - (bin.currentCount * ball.radius * 2);
 
-        // Floor collision
+        // Pull ball towards its target position (slower suction)
+        ball.vx += (binCenterX - ball.x) * 0.008;
+        ball.vy += (targetY - ball.y) * 0.008;
+
+        // Floor collision (keep physics active until settled)
         if (ball.y > floorY - ball.radius) {
           ball.y = floorY - ball.radius;
-          ball.vy = Math.min(0, ball.vy);
+          ball.vy *= -0.2; 
           ball.vx *= BIN_FRICTION;
         }
 
-        // Settle logic - Must be slow, supported, AND physically inside the bin
-        const isSlow = Math.abs(ball.vx) < SNAP_THRESHOLD && Math.abs(ball.vy) < SNAP_THRESHOLD;
-        const isVerySlowY = Math.abs(ball.vy) < 0.05;
-        const isDeepInBin = ball.y > binTopY + ball.radius;
-        const isSupported = ball.y > floorY - ball.radius - 2 || 
-                           balls.some(other => other !== ball && other.settled && 
-                                      other.binIndex === ball.binIndex &&
-                                      Math.abs(other.x - ball.x) < ball.radius * 1.5 &&
-                                      ball.y < other.y && 
-                                      Math.abs(other.y - ball.y) < ball.radius * 2 + 5);
+        // Settle logic - Only settle when very close to the target position AND bin has space
+        const isAtTargetX = Math.abs(ball.x - binCenterX) < 2;
+        const isAtTargetY = Math.abs(ball.y - targetY) < 2;
+        const hasSpace = bin.currentCount < bin.maxCapacity;
 
-        if (isDeepInBin && (isSlow || (isVerySlowY && Math.abs(ball.vx) < 1.0)) && isSupported) {
-          ball.stuckTimer++;
-          if (ball.stuckTimer > 10) { // Increased wait time for more natural settling
-            if (!ball.settled) {
-              ball.settled = true;
-              ball.vx = 0;
-              ball.vy = 0;
-              ball.x = binCenterX;
-              bin.currentCount++;
-              anySettledThisFrame = true;
-            }
-          }
-        } else {
-          ball.stuckTimer = 0;
-          
-          // Forced settle ONLY if deep inside bin and truly stuck for a long time
-          if (ball.y > binTopY + ball.radius * 2) {
-            ball.inBinTimer = (ball.inBinTimer || 0) + 1;
-            if (ball.inBinTimer > 300) { // 5 seconds - very conservative
-              ball.settled = true;
-              ball.vx = 0;
-              ball.vy = 0;
-              ball.x = binCenterX;
-              bin.currentCount++;
-              anySettledThisFrame = true;
-            }
-          } else {
-            ball.inBinTimer = 0;
-          }
-
-          // Tiny nudge inside bins
+        if (isAtTargetX && isAtTargetY && hasSpace) {
           if (!ball.settled) {
-            ball.vx += (Math.random() - 0.5) * 0.05;
+            ball.settled = true;
+            ball.vx = 0;
+            ball.vy = 0;
+            ball.x = binCenterX;
+            ball.y = targetY;
+            bin.currentCount++;
+            anySettledThisFrame = true;
           }
         }
       }
@@ -627,7 +658,7 @@ export default function App() {
 
         if (isNearTop && isSlow) {
           ball.stuckTimer++;
-          if (ball.stuckTimer > 45) { // Give it more time to fall naturally
+          if (ball.stuckTimer > 30) { // Faster anti-stuck kick
             ball.vx += (Math.random() - 0.5) * 8.0; // Stronger kick
             ball.vy -= 2.5; // Bigger hop
             ball.stuckTimer = 0;
@@ -678,18 +709,35 @@ export default function App() {
     if (isSimulatingRef.current && Date.now() - simulationStartTimeRef.current > 30000) {
       balls.forEach(b => {
         if (b.released && !b.settled) {
-          b.settled = true;
-          b.vx = 0;
-          b.vy = 0;
-          // If above bins, try to find a bin
-          if (b.binIndex === null) {
-            const bIdx = Math.min(bins.length - 1, Math.max(0, Math.floor((b.x - binStartX) / binWidth)));
+          // If above bins, try to find a bin with space
+          let bIdx = b.binIndex;
+          if (bIdx === null) {
+            bIdx = Math.min(bins.length - 1, Math.max(0, Math.floor((b.x - binStartX) / binWidth)));
+          }
+          
+          const bin = bins[bIdx];
+          if (bin && bin.currentCount < bin.maxCapacity) {
+            b.settled = true;
+            b.vx = 0;
+            b.vy = 0;
             b.binIndex = bIdx;
             b.x = binStartX + bIdx * binWidth + binWidth / 2;
+            b.y = floorY - b.radius - (bin.currentCount * b.radius * 2);
+            bin.currentCount++;
           } else {
-            b.x = binStartX + b.binIndex * binWidth + binWidth / 2;
+            // If bin is full, try to find ANY bin with space
+            const freeBinIdx = bins.findIndex(bin => bin.currentCount < bin.maxCapacity);
+            if (freeBinIdx !== -1) {
+              const freeBin = bins[freeBinIdx];
+              b.settled = true;
+              b.vx = 0;
+              b.vy = 0;
+              b.binIndex = freeBinIdx;
+              b.x = binStartX + freeBinIdx * binWidth + binWidth / 2;
+              b.y = floorY - b.radius - (freeBin.currentCount * b.radius * 2);
+              freeBin.currentCount++;
+            }
           }
-          if (b.binIndex !== null) bins[b.binIndex].currentCount++;
         }
       });
       allSettled = true;
@@ -939,6 +987,8 @@ export default function App() {
           released: false,
           binIndex: null,
           stuckTimer: 0,
+          settleTimer: 0,
+          inBinTimer: 0,
           color: s.color
         };
       });
@@ -971,128 +1021,158 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col md:flex-row h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
-      {/* --- Left Panel --- */}
-      <div className="w-full md:w-96 bg-white border-r border-slate-200 flex flex-col shadow-xl z-10">
-        <div className="p-4 border-bottom border-slate-100 bg-white">
-          <div className="flex items-center gap-3">
-            <a href="https://skolechips.dk" target="_blank" rel="noopener noreferrer" className="hover:opacity-80 transition-opacity">
-              <img src="https://i.imgur.com/lYK7DT3.png" alt="Skolechips Logo" className="w-10 h-10 object-contain" />
-            </a>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-              Gruppepachinko
-            </h1>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-4">
-          <AnimatePresence>
-            {showSettings && (
-              <motion.div
-                initial={{ opacity: 1, height: 'auto' }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className="space-y-4 overflow-hidden"
-              >
-                {/* Names Input */}
-                <div className="space-y-2">
-                  <label className="text-xs font-bold uppercase tracking-wider text-slate-500 flex justify-between">
-                    Elevnavne
-                    <span className="text-slate-400 font-normal">{students.length} elever</span>
-                  </label>
-                  <textarea
-                    className="w-full h-48 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all resize-none font-medium"
-                    placeholder="Indtast navne her...&#10;Navn 1&#10;Navn 2"
-                    value={namesText}
-                    onChange={(e) => setNamesText(e.target.value)}
-                  />
+    <div className="flex flex-row h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden relative">
+      {/* --- Left Panel (Collapsible only on mobile) --- */}
+      <AnimatePresence initial={false}>
+        {isSidebarOpen && (
+          <motion.div 
+            initial={isMobile ? { x: -400 } : { x: 0 }}
+            animate={{ x: 0 }}
+            exit={isMobile ? { x: -400 } : { x: 0 }}
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            className={`${isMobile ? 'absolute inset-y-0 left-0 z-30' : 'relative z-10'} w-[320px] h-full bg-white border-r border-slate-200 flex flex-col shadow-xl`}
+          >
+            <div className="p-4 border-bottom border-slate-100 bg-white">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <a href="https://skolechips.dk" target="_blank" rel="noopener noreferrer" className="hover:opacity-80 transition-opacity">
+                    <img src="https://i.imgur.com/lYK7DT3.png" alt="Skolechips Logo" className="w-10 h-10 object-contain" />
+                  </a>
+                  <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
+                    Gruppepachinko
+                  </h1>
                 </div>
+                {isMobile && (
+                  <button 
+                    onClick={() => setIsSidebarOpen(false)}
+                    className="p-2 hover:bg-slate-100 rounded-full text-slate-400 transition-colors"
+                  >
+                    <ChevronRight className="w-6 h-6 rotate-180" />
+                  </button>
+                )}
+              </div>
+            </div>
 
-                {/* Settings Toggle */}
-                <div className="space-y-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                  <div className="flex bg-white p-1 rounded-lg border border-slate-200">
+            <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-4">
+              <AnimatePresence>
+                {showSettings && (
+                  <motion.div
+                    initial={{ opacity: 1, height: 'auto' }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="space-y-4 overflow-hidden"
+                  >
+                    {/* Names Input */}
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase tracking-wider text-slate-500 flex justify-between">
+                        Elevnavne
+                        <span className="text-slate-400 font-normal">{students.length} elever</span>
+                      </label>
+                      <textarea
+                        className="w-full h-48 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all resize-none font-medium"
+                        placeholder="Indtast navne her...&#10;Navn 1&#10;Navn 2"
+                        value={namesText}
+                        onChange={(e) => setNamesText(e.target.value)}
+                      />
+                    </div>
+
+                    {/* Settings Toggle */}
+                    <div className="space-y-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                      <div className="flex bg-white p-1 rounded-lg border border-slate-200">
+                        <button
+                          onClick={() => setMode('count')}
+                          className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${mode === 'count' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'}`}
+                        >
+                          Antal grupper
+                        </button>
+                        <button
+                          onClick={() => setMode('size')}
+                          className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${mode === 'size' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'}`}
+                        >
+                          Elever pr. gruppe
+                        </button>
+                      </div>
+
+                      <div className="space-y-1">
+                        <input
+                          type="number"
+                          min="1"
+                          className="w-full p-2 bg-white border border-slate-200 rounded-lg text-center font-bold text-lg focus:ring-2 focus:ring-emerald-500"
+                          value={targetValue}
+                          onChange={(e) => setTargetValue(Math.max(1, parseInt(e.target.value) || 1))}
+                        />
+                        <p className="text-[10px] text-center text-slate-400 italic">
+                          {mode === 'count' 
+                            ? `Dette vil skabe ${targetValue} grupper` 
+                            : `Dette vil skabe ca. ${calculatedGroupCount} grupper`}
+                        </p>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Actions */}
+              <div className="grid grid-cols-2 gap-3">
+                {showSettings ? (
+                  <>
                     <button
-                      onClick={() => setMode('count')}
-                      className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${mode === 'count' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'}`}
+                      onClick={handleShuffle}
+                      className="flex items-center justify-center gap-2 py-3 px-4 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-50 transition-all active:scale-95"
                     >
-                      Antal grupper
+                      <Shuffle className="w-4 h-4" />
+                      Bland
                     </button>
                     <button
-                      onClick={() => setMode('size')}
-                      className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${mode === 'size' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'}`}
+                      onClick={handleReset}
+                      className="flex items-center justify-center gap-2 py-3 px-4 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-50 transition-all active:scale-95"
                     >
-                      Elever pr. gruppe
+                      <RotateCcw className="w-4 h-4" />
+                      Nulstil
                     </button>
-                  </div>
+                    <button
+                      disabled={isSimulating || students.length === 0}
+                      onClick={initSimulation}
+                      className="col-span-2 flex items-center justify-center gap-2 py-4 px-4 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 disabled:opacity-50 disabled:shadow-none active:scale-95"
+                    >
+                      <Play className="w-5 h-5 fill-current" />
+                      Start
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleReset}
+                    className="col-span-2 flex items-center justify-center gap-2 py-4 px-4 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 active:scale-95"
+                  >
+                    <RotateCcw className="w-5 h-5" />
+                    Nulstil
+                  </button>
+                )}
+              </div>
 
-                  <div className="space-y-1">
-                    <input
-                      type="number"
-                      min="1"
-                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-center font-bold text-lg focus:ring-2 focus:ring-emerald-500"
-                      value={targetValue}
-                      onChange={(e) => setTargetValue(Math.max(1, parseInt(e.target.value) || 1))}
-                    />
-                    <p className="text-[10px] text-center text-slate-400 italic">
-                      {mode === 'count' 
-                        ? `Dette vil skabe ${targetValue} grupper` 
-                        : `Dette vil skabe ca. ${calculatedGroupCount} grupper`}
-                    </p>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+              {/* Group Results List */}
+              <ResultsList 
+                groups={groups} 
+                copied={copied} 
+                onCopy={copyToClipboard} 
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-          {/* Actions */}
-          <div className="grid grid-cols-2 gap-3">
-            {showSettings ? (
-              <>
-                <button
-                  onClick={handleShuffle}
-                  className="flex items-center justify-center gap-2 py-3 px-4 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-50 transition-all active:scale-95"
-                >
-                  <Shuffle className="w-4 h-4" />
-                  Bland
-                </button>
-                <button
-                  onClick={handleReset}
-                  className="flex items-center justify-center gap-2 py-3 px-4 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-50 transition-all active:scale-95"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                  Nulstil
-                </button>
-                <button
-                  disabled={isSimulating || students.length === 0}
-                  onClick={initSimulation}
-                  className="col-span-2 flex items-center justify-center gap-2 py-4 px-4 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 disabled:opacity-50 disabled:shadow-none active:scale-95"
-                >
-                  <Play className="w-5 h-5 fill-current" />
-                  Start
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={handleReset}
-                className="col-span-2 flex items-center justify-center gap-2 py-4 px-4 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 active:scale-95"
-              >
-                <RotateCcw className="w-5 h-5" />
-                Nulstil
-              </button>
-            )}
-          </div>
-
-          {/* Group Results List */}
-          <ResultsList 
-            groups={groups} 
-            copied={copied} 
-            onCopy={copyToClipboard} 
-          />
-        </div>
-      </div>
+      {/* Toggle Button (only on mobile when sidebar is closed) */}
+      {isMobile && !isSidebarOpen && (
+        <button
+          onClick={() => setIsSidebarOpen(true)}
+          className="absolute top-6 left-6 z-40 p-3 bg-white border border-slate-200 text-slate-700 rounded-2xl shadow-xl hover:bg-slate-50 transition-all active:scale-95"
+        >
+          <ChevronRight className="w-6 h-6" />
+        </button>
+      )}
 
       {/* --- Right Panel (Canvas) --- */}
-      <div ref={containerRef} className="flex-1 relative bg-slate-50 overflow-hidden">
+      <div ref={containerRef} className="flex-1 relative bg-slate-50 overflow-hidden z-0">
         <canvas
           ref={canvasRef}
           className="w-full h-full"
