@@ -1036,7 +1036,7 @@ export default function App() {
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <a href="https://skolechips.dk" target="_blank" rel="noopener noreferrer" className="hover:opacity-80 transition-opacity">
-                    <img src="https://i.ibb.co/fd0xBbnK/ikon.png" alt="Skolechips Logo" className="w-10 h-10 object-contain" />
+                    <img src="https://res.cloudinary.com/dtw8jfk0k/image/upload/v1774287946/ikon_m2x8mj.png" alt="Skolechips Logo" className="w-10 h-10 object-contain" />
                   </a>
                   <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
                     Gruppepachinko
