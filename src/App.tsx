@@ -679,32 +679,6 @@ export default function App() {
       }
     });
 
-    // Batch update groups once per frame if any ball settled
-    if (anySettledThisFrame || (Date.now() - lastGroupUpdateRef.current > 500 && isSimulatingRef.current)) {
-      lastGroupUpdateRef.current = Date.now();
-      setGroups(prev => {
-        const next = [...prev];
-        const binBallsMap = new Map();
-        
-        ballsRef.current.forEach(b => {
-          if (b.binIndex !== null) {
-            if (!binBallsMap.has(b.binIndex)) binBallsMap.set(b.binIndex, []);
-            binBallsMap.get(b.binIndex).push(b);
-          }
-        });
-
-        bins.forEach((bin, bIdx) => {
-          const binBalls = (binBallsMap.get(bIdx) || [])
-            .sort((a, b) => b.y - a.y);
-          next[bIdx] = {
-            ...next[bIdx],
-            students: binBalls.map(b => b.student.name)
-          };
-        });
-        return next;
-      });
-    }
-
     // Global timeout to prevent infinite simulation
     if (isSimulatingRef.current && Date.now() - simulationStartTimeRef.current > 30000) {
       balls.forEach(b => {
@@ -744,6 +718,32 @@ export default function App() {
       anySettledThisFrame = true;
     }
 
+    // Batch update groups once per frame if any ball settled or simulation finished
+    if (anySettledThisFrame || (allSettled && isSimulatingRef.current) || (Date.now() - lastGroupUpdateRef.current > 500 && isSimulatingRef.current)) {
+      lastGroupUpdateRef.current = Date.now();
+      setGroups(prev => {
+        const next = [...prev];
+        const binBallsMap = new Map();
+        
+        ballsRef.current.forEach(b => {
+          if (b.binIndex !== null) {
+            if (!binBallsMap.has(b.binIndex)) binBallsMap.set(b.binIndex, []);
+            binBallsMap.get(b.binIndex).push(b);
+          }
+        });
+
+        bins.forEach((bin, bIdx) => {
+          const binBalls = (binBallsMap.get(bIdx) || [])
+            .sort((a, b) => b.y - a.y);
+          next[bIdx] = {
+            ...next[bIdx],
+            students: binBalls.map(b => b.student.name)
+          };
+        });
+        return next;
+      });
+    }
+
     if (allSettled && balls.length > 0) {
       isSimulatingRef.current = false;
       setIsSimulating(false);
@@ -763,25 +763,25 @@ export default function App() {
     if (isManualZoom) {
       const balls = ballsRef.current;
       if (balls.length > 0) {
-        let avgX = 0, avgY = 0;
-        let count = 0;
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
         balls.forEach(b => {
-          if (!b.settled) {
-            avgX += b.x;
-            avgY += b.y;
-            count++;
-          }
+          minX = Math.min(minX, b.x - b.radius);
+          maxX = Math.max(maxX, b.x + b.radius);
+          minY = Math.min(minY, b.y - b.radius);
+          maxY = Math.max(maxY, b.y + b.radius);
         });
-        if (count > 0) {
-          targetX = avgX / count;
-          targetY = avgY / count;
-        } else {
-          // If all settled, focus on bins
-          targetX = width / 2;
-          targetY = height - 100;
-        }
+
+        const padding = 60;
+        const contentWidth = (maxX - minX) + padding * 2;
+        const contentHeight = (maxY - minY) + padding * 2;
+        
+        const scaleX = width / contentWidth;
+        const scaleY = height / contentHeight;
+        targetScale = Math.min(2.5, Math.min(scaleX, scaleY));
+        
+        targetX = (minX + maxX) / 2;
+        targetY = (minY + maxY) / 2;
       }
-      targetScale = 1.8;
     } else if (activeBalls.length > 0) {
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       activeBalls.forEach(b => {
@@ -799,9 +799,25 @@ export default function App() {
       targetX = (minX + maxX) / 2;
       targetY = (minY + maxY) / 2;
     } else if (ballsRef.current.length > 0 && ballsRef.current.every(b => b.settled)) {
-      targetScale = 2.2; // Zoom in even more when all settled
-      targetX = width / 2;
-      targetY = height - 100;
+      const balls = ballsRef.current;
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      balls.forEach(b => {
+        minX = Math.min(minX, b.x - b.radius);
+        maxX = Math.max(maxX, b.x + b.radius);
+        minY = Math.min(minY, b.y - b.radius);
+        maxY = Math.max(maxY, b.y + b.radius);
+      });
+
+      const padding = 80;
+      const contentWidth = (maxX - minX) + padding * 2;
+      const contentHeight = (maxY - minY) + padding * 2;
+      
+      const scaleX = width / contentWidth;
+      const scaleY = height / contentHeight;
+      targetScale = Math.min(2.2, Math.min(scaleX, scaleY));
+      
+      targetX = (minX + maxX) / 2;
+      targetY = (minY + maxY) / 2;
     } else {
       // Show whole board initially
       targetScale = 0.8;
