@@ -1050,14 +1050,12 @@ export default function App() {
           >
             <div className="p-4 border-bottom border-slate-100 bg-white">
               <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <a href="https://skolechips.dk" target="_blank" rel="noopener noreferrer" className="hover:opacity-80 transition-opacity">
-                    <img src="https://res.cloudinary.com/dtw8jfk0k/image/upload/v1774287946/ikon_m2x8mj.png" alt="Skolechips Logo" className="w-10 h-10 object-contain" />
-                  </a>
+                <a href="https://skolechips.dk" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+                  <img src="https://res.cloudinary.com/dtw8jfk0k/image/upload/v1774287946/ikon_m2x8mj.png" alt="Skolechips Logo" className="w-10 h-10 object-contain" />
                   <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
                     Gruppepachinko
                   </h1>
-                </div>
+                </a>
                 {isMobile && (
                   <button 
                     onClick={() => setIsSidebarOpen(false)}
